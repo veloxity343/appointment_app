@@ -8,11 +8,10 @@ export function ordinal(n: number): string {
 
 export function fmtTime(t: string): string {
   const [hStr, mStr] = t.split(':')
-  const h = parseInt(hStr, 10)
-  const m = mStr
+  const h    = parseInt(hStr, 10)
   const ampm = h >= 12 ? 'PM' : 'AM'
   const h12  = h % 12 || 12
-  return `${h12}:${m} ${ampm}`
+  return `${h12}:${mStr} ${ampm}`
 }
 
 export function fmtDate(d: string): string {
@@ -38,13 +37,13 @@ export function buildReminder(
   apptTime: string,
   companions?: string | null,
 ): string {
-  const d = new Date(apptDate + 'T00:00:00')
+  const d        = new Date(apptDate + 'T00:00:00')
   const dayName  = d.toLocaleDateString('en-US', { weekday: 'long' })
   const month    = d.toLocaleDateString('en-US', { month: 'long' })
   const dayNum   = ordinal(d.getDate())
   const timeStr  = fmtTime(apptTime)
-  const tLine    = treatment?.trim() ? ` for your ${treatment} session` : ''
-  const withLine = companions?.trim() ? ` together with ${companions.trim()}` : ''
+  const tLine    = treatment?.trim()   ? ` for your ${treatment} session` : ''
+  const withLine = companions?.trim()  ? ` together with ${companions.trim()}` : ''
   return (
     `Good morning ${name},\n` +
     `We would like to remind you of your appointment with us${tLine} on ` +
@@ -78,8 +77,8 @@ export function applyWeekFilter(rows: Appointment[], filter: WeekFilter): Appoin
 export function parseInputDate(raw: string): string | null {
   const formats = [
     { re: /^(\d{2})\/(\d{2})\/(\d{4})$/, fn: (m: RegExpMatchArray) => `${m[3]}-${m[2]}-${m[1]}` },
-    { re: /^(\d{2})-(\d{2})-(\d{4})$/, fn: (m: RegExpMatchArray) => `${m[3]}-${m[2]}-${m[1]}` },
-    { re: /^(\d{4})-(\d{2})-(\d{2})$/, fn: (m: RegExpMatchArray) => m[0] },
+    { re: /^(\d{2})-(\d{2})-(\d{4})$/,   fn: (m: RegExpMatchArray) => `${m[3]}-${m[2]}-${m[1]}` },
+    { re: /^(\d{4})-(\d{2})-(\d{2})$/,   fn: (m: RegExpMatchArray) => m[0] },
   ]
   for (const { re, fn } of formats) {
     const m = raw.trim().match(re)
