@@ -2,6 +2,7 @@ export interface Appointment {
   id: number
   client_name: string
   treatment: string | null
+  companions: string | null
   appt_date: string
   appt_time: string
   confirmed: number

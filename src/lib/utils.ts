@@ -36,6 +36,7 @@ export function buildReminder(
   treatment: string | null,
   apptDate: string,
   apptTime: string,
+  companions?: string | null,
 ): string {
   const d = new Date(apptDate + 'T00:00:00')
   const dayName  = d.toLocaleDateString('en-US', { weekday: 'long' })
@@ -43,10 +44,11 @@ export function buildReminder(
   const dayNum   = ordinal(d.getDate())
   const timeStr  = fmtTime(apptTime)
   const tLine    = treatment?.trim() ? ` for your ${treatment} session` : ''
+  const withLine = companions?.trim() ? ` together with ${companions.trim()}` : ''
   return (
     `Good morning ${name},\n` +
     `We would like to remind you of your appointment with us${tLine} on ` +
-    `${dayName} the ${dayNum} of ${month} @ ${timeStr}.\n` +
+    `*${dayName} the ${dayNum} of ${month} @ ${timeStr}*${withLine}.\n` +
     `Is the above appointment confirmed?\n` +
     `Thank you and see you then! 😊`
   )

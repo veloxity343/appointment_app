@@ -19,15 +19,15 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { client_name, treatment, appt_date, appt_time } = await req.json()
+  const { client_name, treatment, appt_date, appt_time, companions } = await req.json()
 
   if (!client_name || !appt_date || !appt_time)
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
 
   const db     = getDb()
   const result = db.prepare(
-    'INSERT INTO appointments (client_name, treatment, appt_date, appt_time) VALUES (?, ?, ?, ?)'
-  ).run(client_name, treatment ?? null, appt_date, appt_time)
+    'INSERT INTO appointments (client_name, treatment, appt_date, appt_time, companions) VALUES (?, ?, ?, ?, ?)'
+  ).run(client_name, treatment ?? null, appt_date, appt_time, companions ?? null)
   const row = db.prepare('SELECT * FROM appointments WHERE id = ?').get(result.lastInsertRowid)
 
   return NextResponse.json(row, { status: 201 })

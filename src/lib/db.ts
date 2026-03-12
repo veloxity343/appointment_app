@@ -18,6 +18,7 @@ export function getDb(): Database.Database {
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         client_name TEXT    NOT NULL,
         treatment   TEXT,
+        companions  TEXT,
         appt_date   TEXT    NOT NULL,
         appt_time   TEXT    NOT NULL,
         confirmed   INTEGER DEFAULT 0,

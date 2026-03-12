@@ -86,7 +86,7 @@ export function RemindersTab() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(440px, 1fr))', gap: 14 }}>
           {matching.map(r => {
-            const msg = buildReminder(r.client_name, r.treatment, r.appt_date, r.appt_time)
+            const msg = buildReminder(r.client_name, r.treatment, r.appt_date, r.appt_time, r.companions)
             const isCopied = copied === r.id
             return (
               <div key={r.id} style={{
