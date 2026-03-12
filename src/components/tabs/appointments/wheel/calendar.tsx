@@ -4,8 +4,8 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { YearWheel } from './Wheel'
-import { smartParseDate } from './parsers'
+import { YearWheel } from './wheel'
+import { smartParseDate } from '../parsers'
 import { useAnchorPos } from './hooks'
 
 const MONTHS_LONG = [

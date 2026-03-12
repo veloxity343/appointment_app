@@ -39,7 +39,7 @@ export interface CyclicWheelProps {
 export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const settling  = useRef(false)
   const [, redraw] = useState(0)
 
@@ -93,7 +93,7 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
     const vi          = valueToVI(selected)
     offsetRef.current = vi - HALF_WIN
     div.scrollTop     = scrollForVI(vi)
-    redraw(1)
+    redraw(t => t + 1)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // External selected change
@@ -141,7 +141,7 @@ export interface YearWheelProps {
 export function YearWheel({ year, onChange }: YearWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const settling  = useRef(false)
   const [, redraw] = useState(0)
 
@@ -182,7 +182,7 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
     const vi          = yearToVI(year)
     offsetRef.current = Math.max(0, vi - Y_HALF)
     div.scrollTop     = scrollForVI(vi)
-    redraw(1)
+    redraw(t => t + 1)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

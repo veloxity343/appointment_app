@@ -4,8 +4,8 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { CyclicWheel } from './Wheel'
-import { smartParseTime } from './parsers'
+import { CyclicWheel } from './wheel'
+import { smartParseTime } from '../parsers'
 import { useAnchorPos } from './hooks'
 
 const HOURS   = Array.from({ length: 24 }, (_, i) => i)

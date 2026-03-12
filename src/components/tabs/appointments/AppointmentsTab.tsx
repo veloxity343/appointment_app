@@ -8,12 +8,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { applyWeekFilter } from '@/lib/utils'
 import type { Appointment, WeekFilter } from '@/types'
 
-import { AppointmentsTable }  from './appointments/AppointmentsTable'
-import { AppointmentDialog }  from './appointments/AppointmentDialog'
-import { Modal, Btn }         from './appointments/AppointmentDialog'
-import { smartParseDate }     from './appointments/parsers'
-import { EMPTY_DIALOG }       from './appointments/types'
-import type { DialogState }   from './appointments/types'
+import { AppointmentsTable }  from './table'
+import { AppointmentDialog }  from './dialog'
+import { Modal, Btn }         from './dialog'
+import { smartParseDate }     from './parsers'
+import { EMPTY_DIALOG }       from './types'
+import type { DialogState }   from './types'
 
 const WEEK_FILTERS: WeekFilter[] = ['All', 'This Week', 'Next Week', 'Past']
 

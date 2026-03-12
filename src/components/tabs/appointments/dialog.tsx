@@ -2,8 +2,8 @@
 
 // ─── AppointmentDialog.tsx ────────────────────────────────────────────────────
 
-import { CalendarPicker }   from './CalendarPicker'
-import { TimeWheelPicker }  from './TimeWheelPicker'
+import { CalendarPicker }   from './wheel/calendar'
+import { TimeWheelPicker }  from './wheel/time'
 import { smartParseDate }   from './parsers'
 import type { DialogState } from './types'
 
