@@ -2,22 +2,42 @@
 
 import { useState, useEffect, RefObject } from 'react'
 
-// Returns the fixed position for a portal dropdown anchored to an element.
-// Automatically flips upward if the dropdown would overflow the viewport bottom.
-export function useAnchorPos(open: boolean, ref: RefObject<HTMLElement | null>) {
-  const [pos, setPos] = useState({ top: 0, bottom: 0, left: 0, width: 0, flipUp: false })
+export interface AnchorPos {
+  top?:    number
+  bottom?: number
+  left:    number
+  width:   number
+}
+
+export function useAnchorPos(open: boolean, ref: RefObject<HTMLElement | null>): AnchorPos {
+  const [pos, setPos] = useState<AnchorPos>({ left: 0, width: 0 })
 
   useEffect(() => {
-    if (!open || !ref.current) return
-    const r  = ref.current.getBoundingClientRect()
-    const vh = window.innerHeight
-    setPos({
-      top:    r.bottom + 6,
-      bottom: vh - r.top + 6,
-      left:   r.left,
-      width:  r.width,
-      flipUp: r.bottom + 360 > vh - 16,
-    })
+    if (!open) return
+
+    function measure() {
+      if (!ref.current) return
+      const r      = ref.current.getBoundingClientRect()
+      const vh     = window.innerHeight
+      const vw     = window.innerWidth
+      const dropW  = Math.max(r.width, 300)
+      const flipUp = (vh - r.bottom - 8) < 340 && r.top > (vh - r.bottom)
+      const left   = Math.min(r.left, vw - dropW - 8)
+
+      setPos(flipUp
+        ? { bottom: vh - r.top + 6, left, width: r.width }
+        : { top: r.bottom + 6,      left, width: r.width }
+      )
+    }
+
+    const raf = requestAnimationFrame(measure)
+    window.addEventListener('scroll', measure, true)
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('scroll', measure, true)
+      window.removeEventListener('resize', measure)
+    }
   }, [open])
 
   return pos

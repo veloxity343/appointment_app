@@ -1,11 +1,9 @@
 'use client'
 
-// ─── CalendarPicker.tsx ───────────────────────────────────────────────────────
-
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { YearWheel } from './wheel'
-import { smartParseDate } from '../parsers'
+import { smartParseDate, autoFormatDate } from '../parsers'
 import { useAnchorPos } from './hooks'
 
 const MONTHS_LONG = [
@@ -15,24 +13,23 @@ const MONTHS_LONG = [
 const DAYS_SHORT = ['Mo','Tu','We','Th','Fr','Sa','Su']
 
 interface Props {
-  value:        string   // ISO yyyy-mm-dd or ''
-  textValue:    string   // what the input shows
+  value:        string
+  textValue:    string
   onDateSelect: (iso: string, display: string) => void
   onTextChange: (raw: string) => void
 }
 
 export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }: Props) {
-  const [open, setOpen]         = useState(false)
-  const anchorRef               = useRef<HTMLDivElement>(null)
-  const dropRef                 = useRef<HTMLDivElement>(null)
-  const pos                     = useAnchorPos(open, anchorRef)
+  const [open, setOpen] = useState(false)
+  const anchorRef       = useRef<HTMLDivElement>(null)
+  const dropRef         = useRef<HTMLDivElement>(null)
+  const pos             = useAnchorPos(open, anchorRef)
 
-  const today     = new Date()
-  const initDate  = value ? new Date(value + 'T00:00:00') : today
+  const today    = new Date()
+  const initDate = value ? new Date(value + 'T00:00:00') : today
   const [viewMonth, setViewMonth] = useState(initDate.getMonth())
   const [viewYear,  setViewYear]  = useState(initDate.getFullYear())
 
-  // Sync view when value changes externally
   useEffect(() => {
     if (value) {
       const d = new Date(value + 'T00:00:00')
@@ -41,7 +38,6 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     }
   }, [value])
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
@@ -54,28 +50,34 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  function selectDay(day: number) {
-    const mm = String(viewMonth + 1).padStart(2, '0')
-    const dd = String(day).padStart(2, '0')
-    onDateSelect(`${viewYear}-${mm}-${dd}`, `${dd}/${mm}/${viewYear}`)
-    setOpen(false)
-  }
-
   function handleText(raw: string) {
-    onTextChange(raw)
-    const iso = smartParseDate(raw)
+    const formatted = autoFormatDate(raw)
+    onTextChange(formatted)
+    const iso = smartParseDate(formatted)
     if (iso) {
       const d = new Date(iso + 'T00:00:00')
       setViewMonth(d.getMonth())
       setViewYear(d.getFullYear())
-      onDateSelect(iso, raw)
+      onDateSelect(iso, formatted)
     }
   }
 
-  const prevMonth = () => viewMonth === 0 ? (setViewMonth(11), setViewYear(y => y - 1)) : setViewMonth(m => m - 1)
-  const nextMonth = () => viewMonth === 11 ? (setViewMonth(0), setViewYear(y => y + 1)) : setViewMonth(m => m + 1)
+  function selectDay(day: number) {
+    const mm   = String(viewMonth + 1).padStart(2, '0')
+    const dd   = String(day).padStart(2, '0')
+    const iso  = `${viewYear}-${mm}-${dd}`
+    const disp = `${dd}/${mm}/${viewYear}`
+    onDateSelect(iso, disp)
+    setOpen(false)
+  }
 
-  // Build calendar grid (Monday-first)
+  const prevMonth = () => viewMonth === 0
+    ? (setViewMonth(11), setViewYear(y => y - 1))
+    : setViewMonth(m => m - 1)
+  const nextMonth = () => viewMonth === 11
+    ? (setViewMonth(0), setViewYear(y => y + 1))
+    : setViewMonth(m => m + 1)
+
   const firstDay    = new Date(viewYear, viewMonth, 1).getDay()
   const offset      = firstDay === 0 ? 6 : firstDay - 1
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
@@ -96,7 +98,8 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
           value={textValue}
           onChange={e => handleText(e.target.value)}
           onFocus={() => setOpen(true)}
-          placeholder="DD/MM/YYYY or d/m/yy"
+          placeholder="DD/MM/YYYY"
+          maxLength={10}
           style={inputStyle}
         />
         <span onClick={() => setOpen(o => !o)} style={iconStyle}>📅</span>
@@ -105,35 +108,26 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
       {open && createPortal(
         <div ref={dropRef} style={{
           position: 'fixed', zIndex: 9999,
-          top:    pos.flipUp ? undefined : pos.top,
-          bottom: pos.flipUp ? pos.bottom : undefined,
-          left: pos.left, width: Math.max(pos.width, 300),
+          top: pos.top, bottom: pos.bottom, left: pos.left,
+          width: Math.max(pos.width, 300),
           background: '#16161C', border: '1px solid #2A2A35',
           borderRadius: 14, boxShadow: '0 20px 60px rgba(0,0,0,0.85)', padding: 14,
         }}>
-
-          {/* Month / Year nav */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <button onClick={prevMonth} style={navBtnStyle}>‹</button>
-            <select
-              value={viewMonth}
-              onChange={e => setViewMonth(Number(e.target.value))}
-              style={selectStyle}
-            >
+            <select value={viewMonth} onChange={e => setViewMonth(Number(e.target.value))} style={selectStyle}>
               {MONTHS_LONG.map((m, i) => <option key={i} value={i}>{m}</option>)}
             </select>
             <YearWheel year={viewYear} onChange={setViewYear} />
             <button onClick={nextMonth} style={navBtnStyle}>›</button>
           </div>
 
-          {/* Day headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2, marginBottom: 4 }}>
             {DAYS_SHORT.map(d => (
               <div key={d} style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: '#6B6B80' }}>{d}</div>
             ))}
           </div>
 
-          {/* Day cells */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2 }}>
             {cells.map((day, i) => {
               if (!day) return <div key={i} />
@@ -142,11 +136,10 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
               return (
                 <button key={i} onClick={() => selectDay(day)} style={{
                   width: '100%', aspectRatio: '1', borderRadius: 6, cursor: 'pointer',
-                  border:      isToday && !isSel ? '1px solid rgba(34,197,94,0.4)' : 'none',
-                  background:  isSel ? '#22C55E' : 'transparent',
-                  color:       isSel ? '#000' : isToday ? '#22C55E' : '#ECECF1',
-                  fontSize: 12, fontWeight: isSel || isToday ? 700 : 400,
-                  fontFamily: 'inherit',
+                  border:     isToday && !isSel ? '1px solid rgba(34,197,94,0.4)' : 'none',
+                  background: isSel ? '#22C55E' : 'transparent',
+                  color:      isSel ? '#000' : isToday ? '#22C55E' : '#ECECF1',
+                  fontSize: 12, fontWeight: isSel || isToday ? 700 : 400, fontFamily: 'inherit',
                 }}
                   onMouseEnter={e => { if (!isSel) (e.currentTarget as HTMLButtonElement).style.background = '#1E1E26' }}
                   onMouseLeave={e => { if (!isSel) (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}

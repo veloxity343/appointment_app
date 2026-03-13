@@ -89,19 +89,21 @@ export function AppointmentsTab({ weekFilter, onWeekFilterChange }: Props) {
   }
 
   function openEdit(r: Appointment) {
-    const [y, m, d]     = r.appt_date.split('-')
-    const [hStr, mStr]  = r.appt_time.split(':')
-    const h             = parseInt(hStr, 10)
+    const [y, m, d]    = r.appt_date.split('-')
+    const [hStr, mStr] = r.appt_time.split(':')
+    const h24          = parseInt(hStr, 10)
+    const ampm         = h24 >= 12 ? 'PM' : 'AM'
+    const h12          = h24 % 12 === 0 ? 12 : h24 % 12
     setDlg({
-      open: true, mode: 'edit', id: r.id,
-      name:       r.client_name,
-      treatment:  r.treatment ?? '',
-      date:       r.appt_date,
-      dateInput:  `${d}/${m}/${y}`,
-      time:       r.appt_time,
-      timeInput:  `${h % 12 || 12}:${mStr} ${h >= 12 ? 'PM' : 'AM'}`,
-      companions: r.companions ?? '',
-      error: '',
+        open: true, mode: 'edit', id: r.id,
+        name:       r.client_name,
+        treatment:  r.treatment ?? '',
+        date:       r.appt_date,
+        dateInput:  `${d}/${m}/${y}`,
+        time:       r.appt_time,
+        timeInput:  `${h12}:${mStr} ${ampm}`,
+        companions: r.companions ?? '',
+        error: '',
     })
   }
 
