@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { YearWheel } from './wheel'
 import {
@@ -9,7 +9,7 @@ import {
 } from '../parsers'
 import { useAnchorPos } from './hooks'
 
-// ── Keyframe injection (once, no JSX style tags) ───────────────────────────────
+// ── Keyframe injection ────────────────────────────────────────────────────────
 const _injected = new Set<string>()
 function injectKeyframes(id: string, css: string) {
   if (_injected.has(id) || typeof document === 'undefined') return
@@ -19,7 +19,7 @@ function injectKeyframes(id: string, css: string) {
   document.head.appendChild(el)
 }
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 const YEAR_MIN = 1980
 const YEAR_MAX = 2100
 
@@ -29,7 +29,7 @@ const MONTHS_LONG = [
 ]
 const DAYS_SHORT = ['Mo','Tu','We','Th','Fr','Sa','Su']
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Pure helpers ──────────────────────────────────────────────────────────────
 
 function isoToSlots(iso: string): DateSlots {
   if (!iso) return emptyDateSlots()
@@ -37,6 +37,11 @@ function isoToSlots(iso: string): DateSlots {
   if (!m) return emptyDateSlots()
   const [, y, mo, d] = m
   return [d[0], d[1], mo[0], mo[1], y[0], y[1], y[2], y[3]]
+}
+
+function yearToSlots(y: number): [string, string, string, string] {
+  const s = String(y).padStart(4, '0')
+  return [s[0], s[1], s[2], s[3]]
 }
 
 function autocorrectYear(s: DateSlots): DateSlots {
@@ -50,23 +55,19 @@ function autocorrectYear(s: DateSlots): DateSlots {
 }
 
 /**
- * Progressive year snapping:
- *   0-2 digits → null (no snap)
- *   3 digits   → closest year to currentYear within that decade prefix
+ * Progressive year snapping — ascending order:
+ *   0–2 digits → no snap (return null)
+ *   3 digits   → prefix + '0'  (e.g. "201" → 2010, "202" → 2020)
  *   4 digits   → exact, clamped to [YEAR_MIN, YEAR_MAX]
  */
-function resolveViewYear(s: DateSlots, currentYear: number): number | null {
-  const y = [s[4], s[5], s[6], s[7]]
-  const filled = y.filter(v => v !== null).length
+function resolveViewYear(s: DateSlots): number | null {
+  const filled = [s[4], s[5], s[6], s[7]].filter(v => v !== null).length
   if (filled < 3) return null
   if (filled === 3) {
-    const prefix  = y[0]! + y[1]! + y[2]!
-    const lo      = parseInt(prefix + '0')
-    const hi      = parseInt(prefix + '9')
-    const closest = Math.max(lo, Math.min(hi, currentYear))
-    return Math.max(YEAR_MIN, closest)
+    const lo = parseInt(s[4]! + s[5]! + s[6]! + '0')
+    return Math.max(YEAR_MIN, lo)
   }
-  const exact = parseInt(y[0]! + y[1]! + y[2]! + y[3]!)
+  const exact = parseInt(s[4]! + s[5]! + s[6]! + s[7]!)
   return Math.max(YEAR_MIN, Math.min(YEAR_MAX, exact))
 }
 
@@ -76,7 +77,7 @@ function resolveViewMonth(s: DateSlots): number | null {
   return mo >= 1 && mo <= 12 ? mo - 1 : null
 }
 
-// ── Component ──────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   value:        string
@@ -90,10 +91,6 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   const [focused, setFocused] = useState(false)
   const [slots,   setSlots]   = useState<DateSlots>(() => isoToSlots(value))
 
-  // Keep a ref that always reflects the latest slots — lets event handlers
-  // compute next-state without reading potentially-stale React state, and
-  // avoids calling onTextChange/onDateSelect inside a setState updater
-  // (which React forbids as it counts as a setState-during-render).
   const slotsRef = useRef(slots)
 
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -101,14 +98,12 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   const inputRef  = useRef<HTMLInputElement>(null)
   const pos       = useAnchorPos(open, anchorRef)
 
-  const today      = new Date()
-  const todayYear  = today.getFullYear()
+  const today = new Date()
 
-  const initDate   = value ? new Date(value + 'T00:00:00') : today
+  const initDate = value ? new Date(value + 'T00:00:00') : today
   const [viewMonth, setViewMonth] = useState(initDate.getMonth())
   const [viewYear,  setViewYear]  = useState(initDate.getFullYear())
 
-  // Sync when value prop changes externally (dialog opens for edit)
   useEffect(() => {
     if (value) {
       const s = isoToSlots(value)
@@ -134,46 +129,57 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  /**
-   * Commit a freshly-computed slots value:
-   *   1. Update the ref and React state.
-   *   2. Call parent callbacks directly (never inside a setState updater).
-   *   3. Snap calendar view from fully-known slots only.
-   */
-  const commitSlots = useCallback((s: DateSlots) => {
+  // ── commitSlots ───────────────────────────────────────────────────────────
+  // Plain function — always captures current render's callbacks.
+  // Only called from event handlers, never inside a setState updater.
+  function commitSlots(s: DateSlots) {
     slotsRef.current = s
     setSlots(s)
-
-    // Parent callbacks — safe here because commitSlots is called from event
-    // handlers (keyDown, selectDay), never from a setState updater.
     onTextChange(dateSlotsToDisplay(s))
 
     const newMonth = resolveViewMonth(s)
     if (newMonth !== null) setViewMonth(newMonth)
 
-    const newYear = resolveViewYear(s, todayYear)
+    const newYear = resolveViewYear(s)
     if (newYear !== null) setViewYear(newYear)
 
     const iso = dateSlotsToISO(s)
     if (iso) onDateSelect(iso, dateSlotsToDisplay(s))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onTextChange, onDateSelect, todayYear])
+  }
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  // ── handleKeyDown ─────────────────────────────────────────────────────────
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     e.preventDefault()
-
     if (e.key === 'Backspace' || e.key === 'Delete') {
-      // Read current slots from ref (always fresh), compute next, commit.
       commitSlots(popDateDigit(slotsRef.current))
       return
     }
-
     if (/^\d$/.test(e.key)) {
-      const pushed    = pushDateDigit(slotsRef.current, e.key)
-      const corrected = autocorrectYear(pushed)
-      commitSlots(corrected)
+      commitSlots(autocorrectYear(pushDateDigit(slotsRef.current, e.key)))
     }
-  }, [commitSlots])
+  }
+
+  // ── Year wheel callback ───────────────────────────────────────────────────
+  // When the user scrolls the year wheel, write the chosen year back into
+  // slots[4..7] and update the input field display accordingly.
+  function handleYearWheel(y: number) {
+    const clamped = Math.max(YEAR_MIN, Math.min(YEAR_MAX, y))
+    setViewYear(clamped)
+
+    // Overwrite the four year slots with the scrolled year
+    const [y0, y1, y2, y3] = yearToSlots(clamped)
+    const next: DateSlots = [
+      slotsRef.current[0], slotsRef.current[1],
+      slotsRef.current[2], slotsRef.current[3],
+      y0, y1, y2, y3,
+    ]
+    slotsRef.current = next
+    setSlots(next)
+    onTextChange(dateSlotsToDisplay(next))
+
+    const iso = dateSlotsToISO(next)
+    if (iso) onDateSelect(iso, dateSlotsToDisplay(next))
+  }
 
   function selectDay(day: number) {
     const mm   = String(viewMonth + 1).padStart(2, '0')
@@ -267,7 +273,7 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
             <select value={viewMonth} onChange={e => setViewMonth(Number(e.target.value))} style={selectStyle}>
               {MONTHS_LONG.map((m, i) => <option key={i} value={i}>{m}</option>)}
             </select>
-            <YearWheel year={viewYear} onChange={setViewYear} />
+            <YearWheel year={viewYear} onChange={handleYearWheel} />
             <button onClick={nextMonth} style={navBtnStyle}>›</button>
           </div>
 

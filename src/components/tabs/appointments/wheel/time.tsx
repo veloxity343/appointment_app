@@ -1,11 +1,17 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+// Display format: hh:mm AM  (2-digit hour, e.g. "09:30 AM")
+// Slots: h0 h1 : m0 m1 [space] ampm
+//
+// Typing → wheels snap ONLY when all 5 slots are complete.
+// Wheel  → updates only its own slot pair; preserves all typed slots.
+
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { CyclicWheel, BoundedWheel } from './wheel'
 import { useAnchorPos } from './hooks'
 
-// ── Keyframe injection (once, no JSX style tags) ───────────────────────────────
+// ── Keyframe injection ────────────────────────────────────────────────────────
 const _injected = new Set<string>()
 function injectKeyframes(id: string, css: string) {
   if (_injected.has(id) || typeof document === 'undefined') return
@@ -15,15 +21,13 @@ function injectKeyframes(id: string, css: string) {
   document.head.appendChild(el)
 }
 
-// ── Slot type ──────────────────────────────────────────────────────────────────
-// Display: hh:mm AM  (2-digit hour, e.g. "09:30 AM")
-// Slots:   h0  h1  :  m0  m1  [space]  ampm
+// ── Slot type ─────────────────────────────────────────────────────────────────
 
 interface TimeSlots {
-  h0:   string | null   // '0' or '1'
-  h1:   string | null   // units of hour (clamped by h0)
-  m0:   string | null   // '0'–'5'
-  m1:   string | null   // '0'–'9'
+  h0:   string | null
+  h1:   string | null
+  m0:   string | null
+  m1:   string | null
   ampm: 'AM' | 'PM' | null
 }
 
@@ -77,32 +81,26 @@ function pushChar(s: TimeSlots, char: string): TimeSlots {
   const n     = { ...s }
   const phase = getPhase(n)
   const upper = char.toUpperCase()
-
   if (phase === 'h0') {
     const d = parseInt(char)
     if (isNaN(d)) return n
     if (d === 0 || d === 1) { n.h0 = char }
-    else { n.h0 = '0'; n.h1 = char }   // 2-9 → auto-pad "0X"
+    else { n.h0 = '0'; n.h1 = char }
     return n
   }
   if (phase === 'h1') {
     const d = parseInt(char)
     if (isNaN(d)) return n
-    n.h1 = n.h0 === '0'
-      ? (d < 1 ? '1' : String(d))   // 01–09
-      : (d > 2 ? '2' : String(d))   // 10–12
+    n.h1 = n.h0 === '0' ? (d < 1 ? '1' : String(d)) : (d > 2 ? '2' : String(d))
     return n
   }
   if (phase === 'm0') {
-    const d = parseInt(char)
-    if (isNaN(d)) return n
-    n.m0 = d > 5 ? '5' : char
-    return n
+    const d = parseInt(char); if (isNaN(d)) return n
+    n.m0 = d > 5 ? '5' : char; return n
   }
   if (phase === 'm1') {
     if (isNaN(parseInt(char))) return n
-    n.m1 = char
-    return n
+    n.m1 = char; return n
   }
   if (phase === 'ampm') {
     if (upper === 'A') { n.ampm = 'AM'; return n }
@@ -159,9 +157,8 @@ export function TimeWheelPicker({ value, textValue, onTimeSelect, onTextChange }
   const [open,      setOpen]      = useState(false)
   const [focused,   setFocused]   = useState(false)
 
-  // Ref always reflects latest slots — lets event handlers read current
-  // state synchronously without a stale closure, and prevents calling
-  // onTextChange inside a setState updater (which React forbids).
+  // Always-current ref — event handlers read this instead of potentially
+  // stale React state, without needing useCallback or functional updaters.
   const slotsRef = useRef(initSlots)
 
   const anchorRef = useRef<HTMLDivElement>(null)
@@ -191,69 +188,62 @@ export function TimeWheelPicker({ value, textValue, onTimeSelect, onTextChange }
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  /**
-   * Commit freshly-computed slots.
-   * Called from event handlers only — never from inside a setState updater.
-   * Snap wheels only when all slots are complete (full time typed).
-   */
-  const commitSlots = useCallback((s: TimeSlots) => {
+  // ── commitSlots ───────────────────────────────────────────────────────────
+  // Plain function — always closes over the current render's onTextChange /
+  // onTimeSelect. Called only from event handlers, never inside setState.
+  function commitSlots(s: TimeSlots) {
     slotsRef.current = s
     setSlots(s)
     onTextChange(slotsToDisplay(s))
     const hhmm = slotsToHHMM(s)
     if (hhmm) {
       onTimeSelect(hhmm)
+      // Snap wheels only when full time is known
       const wv = slotsToWheelVals(s)
       setWheelH(wv.h12); setWheelM(wv.m); setWheelAmpm(wv.ampm)
     }
-  }, [onTextChange, onTimeSelect])
+  }
 
-  // ── Keyboard ──────────────────────────────────────────────────────────────
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+  // ── handleKeyDown ─────────────────────────────────────────────────────────
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     e.preventDefault()
     if (e.key === 'Backspace' || e.key === 'Delete') {
-      commitSlots(popSlot(slotsRef.current))
-      return
+      commitSlots(popSlot(slotsRef.current)); return
     }
     const ch = e.key
     if (/^\d$/.test(ch) || /^[aApP]$/.test(ch)) {
       commitSlots(pushChar(slotsRef.current, ch))
     }
-  }, [commitSlots])
+  }
 
-  // ── Wheel callbacks — update only their own slot pair, emit immediately ───
-  const onWheelH = useCallback((h12: number) => {
+  // ── Wheel callbacks ───────────────────────────────────────────────────────
+  // Also plain functions — wheels fire from scroll events, same reasoning.
+  function onWheelH(h12: number) {
     setWheelH(h12)
     const hh   = String(h12).padStart(2, '0')
     const next = { ...slotsRef.current, h0: hh[0], h1: hh[1] }
-    slotsRef.current = next
-    setSlots(next)
+    slotsRef.current = next; setSlots(next)
     onTextChange(slotsToDisplay(next))
-    const hhmm = slotsToHHMM(next)
-    if (hhmm) onTimeSelect(hhmm)
-  }, [onTextChange, onTimeSelect])
+    const hhmm = slotsToHHMM(next); if (hhmm) onTimeSelect(hhmm)
+  }
 
-  const onWheelM = useCallback((m: number) => {
+  function onWheelM(m: number) {
     setWheelM(m)
     const mm   = String(m).padStart(2, '0')
     const next = { ...slotsRef.current, m0: mm[0], m1: mm[1] }
-    slotsRef.current = next
-    setSlots(next)
+    slotsRef.current = next; setSlots(next)
     onTextChange(slotsToDisplay(next))
-    const hhmm = slotsToHHMM(next)
-    if (hhmm) onTimeSelect(hhmm)
-  }, [onTextChange, onTimeSelect])
+    const hhmm = slotsToHHMM(next); if (hhmm) onTimeSelect(hhmm)
+  }
 
-  const onWheelAmpm = useCallback((ap: string) => {
+  function onWheelAmpm(ap: string) {
     const ampm = ap as 'AM' | 'PM'
     setWheelAmpm(ampm)
     const next = { ...slotsRef.current, ampm }
-    slotsRef.current = next
-    setSlots(next)
+    slotsRef.current = next; setSlots(next)
     onTextChange(slotsToDisplay(next))
-    const hhmm = slotsToHHMM(next)
-    if (hhmm) onTimeSelect(hhmm)
-  }, [onTextChange, onTimeSelect])
+    const hhmm = slotsToHHMM(next); if (hhmm) onTimeSelect(hhmm)
+  }
 
   // ── Cursor ────────────────────────────────────────────────────────────────
   const phase   = getPhase(slots)
@@ -311,28 +301,11 @@ export function TimeWheelPicker({ value, textValue, onTimeSelect, onTextChange }
           padding: '14px 18px 18px',
         }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
-            <CyclicWheel
-              items={HOURS_12}
-              selected={wheelH}
-              fmt={v => String(v).padStart(2, '0')}
-              label="Hour"
-              onSelect={onWheelH}
-            />
+            <CyclicWheel items={HOURS_12} selected={wheelH} fmt={v => String(v).padStart(2,'0')} label="Hour" onSelect={onWheelH} />
             <Divider />
-            <CyclicWheel
-              items={MINUTES}
-              selected={wheelM}
-              fmt={v => String(v).padStart(2, '0')}
-              label="Min"
-              onSelect={onWheelM}
-            />
+            <CyclicWheel items={MINUTES}  selected={wheelM} fmt={v => String(v).padStart(2,'0')} label="Min"  onSelect={onWheelM} />
             <Divider />
-            <BoundedWheel
-              items={AMPM_ITEMS}
-              selected={wheelAmpm}
-              label="AM/PM"
-              onSelect={onWheelAmpm}
-            />
+            <BoundedWheel items={AMPM_ITEMS} selected={wheelAmpm} label="AM/PM" onSelect={onWheelAmpm} />
           </div>
           <div style={{
             textAlign: 'center', marginTop: 12, fontSize: 14, fontWeight: 700,
@@ -349,17 +322,14 @@ export function TimeWheelPicker({ value, textValue, onTimeSelect, onTextChange }
 
 // ── Primitives ─────────────────────────────────────────────────────────────────
 
-function SlotChar({
-  c, ph, showCursor, wide,
-}: { c: string | null; ph: string; showCursor: boolean; wide?: boolean }) {
+function SlotChar({ c, ph, showCursor, wide }: { c: string | null; ph: string; showCursor: boolean; wide?: boolean }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center' }}>
       {showCursor && <BlinkCursor id="blink-time" />}
       <span style={{
         fontFamily: "'DM Mono', monospace", fontSize: 13,
         color: c ? '#ECECF1' : '#3A3A50',
-        minWidth: wide ? '2em' : '0.65em',
-        textAlign: 'center',
+        minWidth: wide ? '2em' : '0.65em', textAlign: 'center',
       }}>
         {c ?? ph}
       </span>
@@ -368,11 +338,7 @@ function SlotChar({
 }
 
 function Sep({ children }: { children: string }) {
-  return (
-    <span style={{ color: '#4A4A62', fontFamily: "'DM Mono', monospace", fontSize: 13 }}>
-      {children}
-    </span>
-  )
+  return <span style={{ color: '#4A4A62', fontFamily: "'DM Mono', monospace", fontSize: 13 }}>{children}</span>
 }
 
 function BlinkCursor({ id }: { id: string }) {

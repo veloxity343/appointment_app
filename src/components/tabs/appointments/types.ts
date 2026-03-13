@@ -6,10 +6,10 @@ export interface DialogState {
   id?:        number
   name:       string
   treatment:  string
-  date:       string      // ISO yyyy-mm-dd
-  dateInput:  string      // display string shown in text input
-  time:       string      // HH:MM 24-hr
-  timeInput:  string      // display string shown in text input
+  date:       string
+  dateInput:  string
+  time:       string
+  timeInput:  string
   companions: string
   error:      string
 }

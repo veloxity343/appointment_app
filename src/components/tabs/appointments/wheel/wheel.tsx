@@ -29,9 +29,9 @@ export interface CyclicWheelProps {
 export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWheelProps) {
   const el         = useRef<HTMLDivElement>(null)
   const offsetRef  = useRef(0)
-  const snapTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isSnapping = useRef(false)   // true while our own smooth-scroll runs
-  const isProg     = useRef(false)   // true during programmatic scroll (external select)
+  const snapTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const isSnapping = useRef(false)
+  const isProg     = useRef(false)
   const [, redraw] = useState(0)
 
   const len = items.length
@@ -73,7 +73,7 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
   const onScroll = useCallback(() => {
     if (isProg.current) return
     correctIfNeeded()
-    if (snapTimer.current) clearTimeout(snapTimer.current)
+    clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
   }, [correctIfNeeded, snapToCentre])
 
@@ -95,6 +95,10 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
     div.scrollTo({ top: scrollForVI(vi), behavior: 'smooth' })
     setTimeout(() => { isProg.current = false }, 400)
   }, [selected, valueToVI]) // eslint-disable-line
+
+  useEffect(() => () => {
+    clearTimeout(snapTimer.current)
+  }, [])
 
   const nodes = Array.from({ length: WINDOW_SIZE }, (_, i) => ({
     vi: offsetRef.current + i,
@@ -123,7 +127,7 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BoundedWheel — fixed list, no infinite scroll (AM / PM)
+// BoundedWheel
 // ─────────────────────────────────────────────────────────────────────────────
 export interface BoundedWheelProps {
   items:    string[]
@@ -134,15 +138,12 @@ export interface BoundedWheelProps {
 
 export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
-  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Track whether the current scroll was triggered programmatically
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const isProg    = useRef(false)
   const isBusy    = useRef(false)
 
-  const pad    = Math.floor(VISIBLE / 2)  // 2 padding items each side
+  const pad    = Math.floor(VISIBLE / 2)
   const idxOf  = (v: string) => items.indexOf(v)
-
-  // scrollTop = 0 means first real item is centred
   const scrollForIdx = (idx: number) => idx * ITEM_H
 
   function snapToNearest() {
@@ -156,17 +157,15 @@ export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelP
 
   const onScroll = useCallback(() => {
     if (isProg.current) return
-    if (snapTimer.current) clearTimeout(snapTimer.current)
+    clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToNearest, 120)
   }, []) // eslint-disable-line
 
-  // Mount: scroll to selected
   useEffect(() => {
     const div = el.current; if (!div) return
     div.scrollTop = scrollForIdx(idxOf(selected))
   }, []) // eslint-disable-line
 
-  // External change
   useEffect(() => {
     if (isBusy.current) return
     const div = el.current; if (!div) return
@@ -175,7 +174,10 @@ export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelP
     setTimeout(() => { isProg.current = false }, 400)
   }, [selected]) // eslint-disable-line
 
-  // Render: pad items top and bottom so selection band is always centred
+  useEffect(() => () => {
+    clearTimeout(snapTimer.current)
+  }, [])
+
   const paddedItems: (string | null)[] = [
     ...Array(pad).fill(null),
     ...items,
@@ -189,11 +191,6 @@ export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelP
         <Fade dir="top"    h={ITEM_H * 1.8} />
         <SelectionBand     h={ITEM_H} />
         <Fade dir="bottom" h={ITEM_H * 1.8} />
-        {/*
-          The scroll container height = VISIBLE * ITEM_H.
-          Internal height = paddedItems.length * ITEM_H.
-          Scrollable range = (items.length - 1) * ITEM_H  (from idx 0 to last real item).
-        */}
         <div ref={el} onScroll={onScroll}
           style={{ height: ITEM_H * VISIBLE, overflowY: 'scroll', scrollbarWidth: 'none', cursor: 'pointer' }}>
           <div style={{ height: paddedItems.length * ITEM_H, position: 'relative' }}>
@@ -229,15 +226,20 @@ export interface YearWheelProps {
 }
 
 export function YearWheel({ year, onChange }: YearWheelProps) {
-  const el        = useRef<HTMLDivElement>(null)
-  const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isProg    = useRef(false)
-  const isBusy    = useRef(false)
+  const el         = useRef<HTMLDivElement>(null)
+  const offsetRef  = useRef(0)
+  const snapTimer  = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // isProg: true while a programmatic (external prop) scroll is in effect.
+  // We use a ref-based counter rather than a boolean so that rapid successive
+  // prop changes don't prematurely clear each other's guard.
+  const progCount  = useRef(0)
+  // isBusy: true while a user-initiated snap animation is running.
+  const isBusy     = useRef(false)
   const [, redraw] = useState(0)
 
   const viToYear    = (vi: number) => Math.max(YEAR_MIN, YEAR_MIN + vi)
   const yearToVI    = (y: number)  => Math.max(0, y - YEAR_MIN)
+
   const scrollForVI = (vi: number) =>
     (vi - Math.floor(Y_VISIBLE / 2) - offsetRef.current) * Y_ITEM_H
 
@@ -262,12 +264,15 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
   }, [onChange])
 
   const onScroll = useCallback(() => {
-    if (isProg.current) return
+    // Block snap during any programmatic scroll — use counter so overlapping
+    // rapid prop changes don't clear each other's guard early.
+    if (progCount.current > 0) return
     correctIfNeeded()
-    if (snapTimer.current) clearTimeout(snapTimer.current)
+    clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
   }, [correctIfNeeded, snapToCentre])
 
+  // Mount: set initial position instantly
   useEffect(() => {
     const div = el.current; if (!div) return
     const vi          = yearToVI(year)
@@ -276,13 +281,46 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
     redraw(t => t + 1)
   }, []) // eslint-disable-line
 
+  // External year prop change.
+  //
+  // CRITICAL: use INSTANT scroll (scrollTop assignment), NOT smooth.
+  //
+  // Smooth scroll takes ~300-400ms. When the user types digits quickly,
+  // multiple prop changes arrive within that window. With smooth scroll:
+  //   - Multiple animations overlap and fight each other
+  //   - The progCount guard (formerly a boolean) gets cleared by an earlier
+  //     timeout while a later animation is still running
+  //   - snapToCentre fires mid-animation, reads a wrong scroll position,
+  //     and calls onChange with the wrong year
+  //
+  // Instant scroll is synchronous and produces no meaningful animation
+  // window for snapToCentre to fire into. The wheel simply jumps to the
+  // correct year immediately, which is also the right UX when typing.
   useEffect(() => {
     if (isBusy.current) return
     const div = el.current; if (!div) return
-    isProg.current = true
-    div.scrollTo({ top: scrollForVI(yearToVI(year)), behavior: 'smooth' })
-    setTimeout(() => { isProg.current = false }, 400)
+
+    const vi      = yearToVI(year)
+
+    // Recenter the virtual window if needed before the instant jump
+    const centreVI = vi
+    const newOffset = Math.max(0, centreVI - Y_HALF)
+    if (newOffset !== offsetRef.current) {
+      offsetRef.current = newOffset
+      redraw(t => t + 1)
+    }
+
+    // Increment guard, scroll instantly, decrement after a microtask
+    // (enough time for any scroll event the assignment triggers to fire
+    // and be blocked, but far shorter than any animation window).
+    progCount.current += 1
+    div.scrollTop = scrollForVI(vi)   // instant — synchronous assignment
+    setTimeout(() => { progCount.current = Math.max(0, progCount.current - 1) }, 50)
   }, [year]) // eslint-disable-line
+
+  useEffect(() => () => {
+    clearTimeout(snapTimer.current)
+  }, [])
 
   const nodes = Array.from({ length: Y_WIN }, (_, i) => ({
     vi: offsetRef.current + i,
