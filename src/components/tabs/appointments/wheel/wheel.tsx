@@ -1,32 +1,22 @@
 'use client'
 
 // ─── Wheel.tsx ────────────────────────────────────────────────────────────────
-// Unified virtual-scroll wheel.  Only ever renders WINDOW_SIZE DOM nodes.
-// Silently recentres the scroll anchor when the user approaches an edge,
-// making the list appear infinite in both directions.
-//
-// Two modes:
-//   cyclic    — value = items[vi mod items.length]   (hours, minutes)
-//   monotonic — value = min + vi, clamped at min     (years: 1980 → ∞)
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { useRef, useEffect, useCallback, useState } from 'react'
 
-// ── Shared constants ──────────────────────────────────────────────────────────
 const ITEM_H      = 40
-const VISIBLE     = 5      // rows shown; must be odd
-const WINDOW_SIZE = 41     // DOM nodes rendered; must be >> VISIBLE and odd
+const VISIBLE     = 5
+const WINDOW_SIZE = 41
 const HALF_WIN    = Math.floor(WINDOW_SIZE / 2)
 
-// ── Year-wheel constants ──────────────────────────────────────────────────────
-const Y_ITEM_H    = 28
-const Y_VISIBLE   = 3
-const Y_WIN       = 21
-const Y_HALF      = Math.floor(Y_WIN / 2)
+const Y_ITEM_H  = 28
+const Y_VISIBLE = 3
+const Y_WIN     = 21
+const Y_HALF    = Math.floor(Y_WIN / 2)
 export const YEAR_MIN = 1980
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cyclic wheel  (hours / minutes)
+// CyclicWheel
 // ─────────────────────────────────────────────────────────────────────────────
 export interface CyclicWheelProps {
   items:    number[]
@@ -37,17 +27,16 @@ export interface CyclicWheelProps {
 }
 
 export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWheelProps) {
-  const el        = useRef<HTMLDivElement>(null)
-  const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const settling  = useRef(false)
+  const el         = useRef<HTMLDivElement>(null)
+  const offsetRef  = useRef(0)
+  const snapTimer  = useRef<ReturnType<typeof setTimeout>>()
+  const isSnapping = useRef(false)   // true while our own smooth-scroll runs
+  const isProg     = useRef(false)   // true during programmatic scroll (external select)
   const [, redraw] = useState(0)
 
   const len = items.length
 
-  const viToValue = useCallback((vi: number) => {
-    return items[((vi % len) + len) % len]
-  }, [items, len])
+  const viToValue = useCallback((vi: number) => items[((vi % len) + len) % len], [items, len])
 
   const valueToVI = useCallback((value: number): number => {
     const idx    = items.indexOf(value)
@@ -75,39 +64,42 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
     const div = el.current; if (!div) return
     const centreVI = Math.round(offsetRef.current + div.scrollTop / ITEM_H) + Math.floor(VISIBLE / 2)
     const value    = viToValue(centreVI)
-    settling.current = true
+    isSnapping.current = true
     div.scrollTo({ top: scrollForVI(centreVI), behavior: 'smooth' })
     onSelect(value)
-    setTimeout(() => { settling.current = false }, 350)
+    setTimeout(() => { isSnapping.current = false }, 400)
   }, [viToValue, onSelect])
 
   const onScroll = useCallback(() => {
+    if (isProg.current) return
     correctIfNeeded()
     clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
   }, [correctIfNeeded, snapToCentre])
 
-  // Mount: position selected in centre
+  // Mount
   useEffect(() => {
     const div = el.current; if (!div) return
     const vi          = valueToVI(selected)
     offsetRef.current = vi - HALF_WIN
     div.scrollTop     = scrollForVI(vi)
     redraw(t => t + 1)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line
 
-  // External selected change
+  // External change → programmatic scroll
   useEffect(() => {
-    if (settling.current) return
+    if (isSnapping.current) return
     const div = el.current; if (!div) return
-    div.scrollTo({ top: scrollForVI(valueToVI(selected)), behavior: 'smooth' })
-  }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
+    const vi = valueToVI(selected)
+    isProg.current = true
+    div.scrollTo({ top: scrollForVI(vi), behavior: 'smooth' })
+    setTimeout(() => { isProg.current = false }, 400)
+  }, [selected, valueToVI]) // eslint-disable-line
 
-  // Build node list
-  const nodes = Array.from({ length: WINDOW_SIZE }, (_, i) => {
-    const vi = offsetRef.current + i
-    return { vi, value: viToValue(vi) }
-  })
+  const nodes = Array.from({ length: WINDOW_SIZE }, (_, i) => ({
+    vi: offsetRef.current + i,
+    value: viToValue(offsetRef.current + i),
+  }))
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -131,7 +123,105 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Year wheel  (monotonic, 1980 → ∞)
+// BoundedWheel — fixed list, no infinite scroll (AM / PM)
+// ─────────────────────────────────────────────────────────────────────────────
+export interface BoundedWheelProps {
+  items:    string[]
+  selected: string
+  onSelect: (v: string) => void
+  label:    string
+}
+
+export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelProps) {
+  const el        = useRef<HTMLDivElement>(null)
+  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  // Track whether the current scroll was triggered programmatically
+  const isProg    = useRef(false)
+  const isBusy    = useRef(false)
+
+  const pad    = Math.floor(VISIBLE / 2)  // 2 padding items each side
+  const idxOf  = (v: string) => items.indexOf(v)
+
+  // scrollTop = 0 means first real item is centred
+  const scrollForIdx = (idx: number) => idx * ITEM_H
+
+  function snapToNearest() {
+    const div = el.current; if (!div) return
+    const idx  = Math.min(items.length - 1, Math.max(0, Math.round(div.scrollTop / ITEM_H)))
+    isBusy.current = true
+    div.scrollTo({ top: scrollForIdx(idx), behavior: 'smooth' })
+    onSelect(items[idx])
+    setTimeout(() => { isBusy.current = false }, 400)
+  }
+
+  const onScroll = useCallback(() => {
+    if (isProg.current) return
+    clearTimeout(snapTimer.current)
+    snapTimer.current = setTimeout(snapToNearest, 120)
+  }, []) // eslint-disable-line
+
+  // Mount: scroll to selected
+  useEffect(() => {
+    const div = el.current; if (!div) return
+    div.scrollTop = scrollForIdx(idxOf(selected))
+  }, []) // eslint-disable-line
+
+  // External change
+  useEffect(() => {
+    if (isBusy.current) return
+    const div = el.current; if (!div) return
+    isProg.current = true
+    div.scrollTo({ top: scrollForIdx(idxOf(selected)), behavior: 'smooth' })
+    setTimeout(() => { isProg.current = false }, 400)
+  }, [selected]) // eslint-disable-line
+
+  // Render: pad items top and bottom so selection band is always centred
+  const paddedItems: (string | null)[] = [
+    ...Array(pad).fill(null),
+    ...items,
+    ...Array(pad).fill(null),
+  ]
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div style={colLabelStyle}>{label}</div>
+      <div style={{ position: 'relative', width: '100%' }}>
+        <Fade dir="top"    h={ITEM_H * 1.8} />
+        <SelectionBand     h={ITEM_H} />
+        <Fade dir="bottom" h={ITEM_H * 1.8} />
+        {/*
+          The scroll container height = VISIBLE * ITEM_H.
+          Internal height = paddedItems.length * ITEM_H.
+          Scrollable range = (items.length - 1) * ITEM_H  (from idx 0 to last real item).
+        */}
+        <div ref={el} onScroll={onScroll}
+          style={{ height: ITEM_H * VISIBLE, overflowY: 'scroll', scrollbarWidth: 'none', cursor: 'pointer' }}>
+          <div style={{ height: paddedItems.length * ITEM_H, position: 'relative' }}>
+            {paddedItems.map((item, i) => (
+              item === null
+                ? <div key={`pad-${i}`} style={{ position: 'absolute', top: i * ITEM_H, height: ITEM_H, width: '100%' }} />
+                : <WheelItem
+                    key={item}
+                    top={i * ITEM_H}
+                    text={item}
+                    selected={item === selected}
+                    h={ITEM_H}
+                    onClick={() => {
+                      isBusy.current = false
+                      isProg.current = false
+                      onSelect(item)
+                    }}
+                  />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// YearWheel
 // ─────────────────────────────────────────────────────────────────────────────
 export interface YearWheelProps {
   year:     number
@@ -141,12 +231,13 @@ export interface YearWheelProps {
 export function YearWheel({ year, onChange }: YearWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const settling  = useRef(false)
+  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  const isProg    = useRef(false)
+  const isBusy    = useRef(false)
   const [, redraw] = useState(0)
 
-  const viToYear  = (vi: number) => Math.max(YEAR_MIN, YEAR_MIN + vi)
-  const yearToVI  = (y: number)  => Math.max(0, y - YEAR_MIN)
+  const viToYear    = (vi: number) => Math.max(YEAR_MIN, YEAR_MIN + vi)
+  const yearToVI    = (y: number)  => Math.max(0, y - YEAR_MIN)
   const scrollForVI = (vi: number) =>
     (vi - Math.floor(Y_VISIBLE / 2) - offsetRef.current) * Y_ITEM_H
 
@@ -164,14 +255,14 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
   const snapToCentre = useCallback(() => {
     const div = el.current; if (!div) return
     const centreVI = Math.max(0, Math.round(offsetRef.current + div.scrollTop / Y_ITEM_H) + Math.floor(Y_VISIBLE / 2))
-    const value    = viToYear(centreVI)
-    settling.current = true
+    isBusy.current = true
     div.scrollTo({ top: scrollForVI(centreVI), behavior: 'smooth' })
-    onChange(value)
-    setTimeout(() => { settling.current = false }, 350)
+    onChange(viToYear(centreVI))
+    setTimeout(() => { isBusy.current = false }, 400)
   }, [onChange])
 
   const onScroll = useCallback(() => {
+    if (isProg.current) return
     correctIfNeeded()
     clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
@@ -183,18 +274,20 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
     offsetRef.current = Math.max(0, vi - Y_HALF)
     div.scrollTop     = scrollForVI(vi)
     redraw(t => t + 1)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line
 
   useEffect(() => {
-    if (settling.current) return
+    if (isBusy.current) return
     const div = el.current; if (!div) return
+    isProg.current = true
     div.scrollTo({ top: scrollForVI(yearToVI(year)), behavior: 'smooth' })
-  }, [year]) // eslint-disable-line react-hooks/exhaustive-deps
+    setTimeout(() => { isProg.current = false }, 400)
+  }, [year]) // eslint-disable-line
 
-  const nodes = Array.from({ length: Y_WIN }, (_, i) => {
-    const vi = offsetRef.current + i
-    return { vi, y: viToYear(vi) }
-  })
+  const nodes = Array.from({ length: Y_WIN }, (_, i) => ({
+    vi: offsetRef.current + i,
+    y:  viToYear(offsetRef.current + i),
+  }))
 
   return (
     <div style={{
@@ -211,7 +304,7 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
           {nodes.map(({ vi, y }) => (
             <WheelItem key={vi} top={(vi - offsetRef.current) * Y_ITEM_H}
               text={String(y)} selected={y === year} h={Y_ITEM_H}
-              smallFont onClick={() => { settling.current = false; onChange(y) }} />
+              smallFont onClick={() => { isBusy.current = false; onChange(y) }} />
           ))}
         </div>
       </div>
@@ -220,9 +313,9 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shared sub-components
+// Shared primitives
 // ─────────────────────────────────────────────────────────────────────────────
-function Fade({ dir, h, bg = '#16161C' }: { dir: 'top' | 'bottom'; h: number; bg?: string }) {
+export function Fade({ dir, h, bg = '#16161C' }: { dir: 'top' | 'bottom'; h: number; bg?: string }) {
   return (
     <div style={{
       position: 'absolute', [dir]: 0, left: 0, right: 0, height: h,
@@ -232,7 +325,7 @@ function Fade({ dir, h, bg = '#16161C' }: { dir: 'top' | 'bottom'; h: number; bg
   )
 }
 
-function SelectionBand({ h, inset = 4, radius = 8 }: { h: number; inset?: number; radius?: number }) {
+export function SelectionBand({ h, inset = 4, radius = 8 }: { h: number; inset?: number; radius?: number }) {
   return (
     <div style={{
       position: 'absolute', top: '50%', left: inset, right: inset,
@@ -248,20 +341,17 @@ function WheelItem({ top, text, selected, h, smallFont, onClick }: {
   smallFont?: boolean; onClick?: () => void
 }) {
   return (
-    <div
-      onClick={onClick}
-      style={{
-        position: 'absolute', top, left: 0, right: 0, height: h,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize:   selected ? (smallFont ? 13 : 20) : (smallFont ? 11 : 13),
-        fontWeight: selected ? 700 : 400,
-        color:      selected ? '#22C55E' : '#4A4A62',
-        fontFamily: "'DM Mono', monospace",
-        transition: 'font-size 0.1s, color 0.1s',
-        userSelect: 'none',
-        cursor:     onClick ? 'pointer' : 'default',
-      }}
-    >
+    <div onClick={onClick} style={{
+      position: 'absolute', top, left: 0, right: 0, height: h,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize:   selected ? (smallFont ? 13 : 20) : (smallFont ? 11 : 13),
+      fontWeight: selected ? 700 : 400,
+      color:      selected ? '#22C55E' : '#4A4A62',
+      fontFamily: "'DM Mono', monospace",
+      transition: 'font-size 0.1s, color 0.1s',
+      userSelect: 'none',
+      cursor:     onClick ? 'pointer' : 'default',
+    }}>
       {text}
     </div>
   )

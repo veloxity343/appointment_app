@@ -1,9 +1,12 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { YearWheel } from './wheel'
-import { smartParseDate, autoFormatDate } from '../parsers'
+import {
+  DateSlots, emptyDateSlots, dateSlotsToDisplay, dateSlotsToISO,
+  dateSlotsToPartialISO, pushDateDigit, popDateDigit, smartParseDate,
+} from '../parsers'
 import { useAnchorPos } from './hooks'
 
 const MONTHS_LONG = [
@@ -13,31 +16,48 @@ const MONTHS_LONG = [
 const DAYS_SHORT = ['Mo','Tu','We','Th','Fr','Sa','Su']
 
 interface Props {
-  value:        string
-  textValue:    string
+  value:        string            // ISO yyyy-mm-dd (empty if unset)
+  textValue:    string            // display string (kept in parent for persistence)
   onDateSelect: (iso: string, display: string) => void
   onTextChange: (raw: string) => void
 }
 
+// Parse ISO to slots for initialising when editing an existing record
+function isoToSlots(iso: string): DateSlots {
+  if (!iso) return emptyDateSlots()
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return emptyDateSlots()
+  const [, y, mo, d] = m
+  return [d[0], d[1], mo[0], mo[1], y[0], y[1], y[2], y[3]]
+}
+
 export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }: Props) {
-  const [open, setOpen] = useState(false)
-  const anchorRef       = useRef<HTMLDivElement>(null)
-  const dropRef         = useRef<HTMLDivElement>(null)
-  const pos             = useAnchorPos(open, anchorRef)
+  const [open, setOpen]     = useState(false)
+  const [slots, setSlots]   = useState<DateSlots>(() => isoToSlots(value))
+  const anchorRef           = useRef<HTMLDivElement>(null)
+  const dropRef             = useRef<HTMLDivElement>(null)
+  const inputRef            = useRef<HTMLInputElement>(null)
+  const pos                 = useAnchorPos(open, anchorRef)
 
   const today    = new Date()
   const initDate = value ? new Date(value + 'T00:00:00') : today
   const [viewMonth, setViewMonth] = useState(initDate.getMonth())
   const [viewYear,  setViewYear]  = useState(initDate.getFullYear())
 
+  // When value changes externally (e.g. clicking calendar day), sync slots
   useEffect(() => {
     if (value) {
+      const newSlots = isoToSlots(value)
+      setSlots(newSlots)
       const d = new Date(value + 'T00:00:00')
-      setViewMonth(d.getMonth())
-      setViewYear(d.getFullYear())
+      if (!isNaN(d.getTime())) {
+        setViewMonth(d.getMonth())
+        setViewYear(d.getFullYear())
+      }
     }
   }, [value])
 
+  // Close on outside click
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
@@ -50,33 +70,67 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  function handleText(raw: string) {
-    const formatted = autoFormatDate(raw)
-    onTextChange(formatted)
-    const iso = smartParseDate(formatted)
-    if (iso) {
-      const d = new Date(iso + 'T00:00:00')
-      setViewMonth(d.getMonth())
-      setViewYear(d.getFullYear())
-      onDateSelect(iso, formatted)
+  // After updating slots, push display + ISO to parent and sync calendar view
+  const commitSlots = useCallback((newSlots: DateSlots) => {
+    const display = dateSlotsToDisplay(newSlots)
+    onTextChange(display)
+
+    // Try partial parse first for calendar snapping
+    const partial = dateSlotsToPartialISO(newSlots)
+    if (partial) {
+      const d = new Date(partial + 'T00:00:00')
+      if (!isNaN(d.getTime())) {
+        setViewMonth(d.getMonth())
+        setViewYear(d.getFullYear())
+      }
     }
-  }
+
+    // Full parse for confirming the date
+    const iso = dateSlotsToISO(newSlots)
+    if (iso) {
+      onDateSelect(iso, display)
+    }
+  }, [onTextChange, onDateSelect])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.preventDefault() // block all native text editing
+
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      const next = popDateDigit(slots)
+      setSlots(next)
+      commitSlots(next)
+      return
+    }
+
+    if (/^\d$/.test(e.key)) {
+      const next = pushDateDigit(slots, e.key)
+      setSlots(next)
+      commitSlots(next)
+      return
+    }
+    // Ignore everything else (arrows, letters, etc.)
+  }, [slots, commitSlots])
 
   function selectDay(day: number) {
-    const mm   = String(viewMonth + 1).padStart(2, '0')
-    const dd   = String(day).padStart(2, '0')
-    const iso  = `${viewYear}-${mm}-${dd}`
-    const disp = `${dd}/${mm}/${viewYear}`
+    const mm    = String(viewMonth + 1).padStart(2, '0')
+    const dd    = String(day).padStart(2, '0')
+    const iso   = `${viewYear}-${mm}-${dd}`
+    const disp  = `${dd}/${mm}/${viewYear}`
+    const newSlots = isoToSlots(iso)
+    setSlots(newSlots)
     onDateSelect(iso, disp)
+    onTextChange(disp)
     setOpen(false)
   }
 
-  const prevMonth = () => viewMonth === 0
-    ? (setViewMonth(11), setViewYear(y => y - 1))
-    : setViewMonth(m => m - 1)
-  const nextMonth = () => viewMonth === 11
-    ? (setViewMonth(0), setViewYear(y => y + 1))
-    : setViewMonth(m => m + 1)
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1) }
+    else setViewMonth(m => m - 1)
+  }
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1) }
+    else setViewMonth(m => m + 1)
+  }
 
   const firstDay    = new Date(viewYear, viewMonth, 1).getDay()
   const offset      = firstDay === 0 ? 6 : firstDay - 1
@@ -87,29 +141,66 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   ]
   while (cells.length % 7 !== 0) cells.push(null)
 
-  const selD = value ? new Date(value + 'T00:00:00').getDate()     : null
-  const selM = value ? new Date(value + 'T00:00:00').getMonth()    : null
-  const selY = value ? new Date(value + 'T00:00:00').getFullYear() : null
+  const selDate = value ? new Date(value + 'T00:00:00') : null
+  const selD    = selDate && !isNaN(selDate.getTime()) ? selDate.getDate()     : null
+  const selM    = selDate && !isNaN(selDate.getTime()) ? selDate.getMonth()    : null
+  const selY    = selDate && !isNaN(selDate.getTime()) ? selDate.getFullYear() : null
+
+  // Build display with colour-coded placeholder chars
+  const display = dateSlotsToDisplay(slots)
+  const ph = ['d','d','m','m','y','y','y','y']
+  const filled = slots.every(s => s !== null)
 
   return (
     <div ref={anchorRef}>
-      <div style={{ position: 'relative' }}>
+      <div
+        style={{ position: 'relative' }}
+        onClick={() => { setOpen(true); inputRef.current?.focus() }}
+      >
+        {/* Custom display div styled like an input */}
+        <div style={{
+          ...inputStyle,
+          display: 'flex', alignItems: 'center', gap: 0,
+          cursor: 'text', userSelect: 'none',
+        }}>
+          {/* dd */}
+          <SlotChar c={slots[0]} ph="d" />
+          <SlotChar c={slots[1]} ph="d" />
+          <Sep>/</Sep>
+          {/* mm */}
+          <SlotChar c={slots[2]} ph="m" />
+          <SlotChar c={slots[3]} ph="m" />
+          <Sep>/</Sep>
+          {/* yyyy */}
+          <SlotChar c={slots[4]} ph="y" />
+          <SlotChar c={slots[5]} ph="y" />
+          <SlotChar c={slots[6]} ph="y" />
+          <SlotChar c={slots[7]} ph="y" />
+          {/* Cursor blink on the next empty slot */}
+          {!filled && <Cursor />}
+        </div>
+        {/* Hidden input to capture keystrokes */}
         <input
-          value={textValue}
-          onChange={e => handleText(e.target.value)}
+          ref={inputRef}
+          onKeyDown={handleKeyDown}
           onFocus={() => setOpen(true)}
-          placeholder="DD/MM/YYYY"
-          maxLength={10}
-          style={inputStyle}
+          readOnly
+          style={{
+            position: 'absolute', inset: 0, opacity: 0,
+            width: '100%', height: '100%', cursor: 'text', zIndex: 1,
+          }}
         />
-        <span onClick={() => setOpen(o => !o)} style={iconStyle}>📅</span>
+        <span
+          onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
+          style={{ ...iconStyle, zIndex: 2 }}
+        >📅</span>
       </div>
 
-      {open && createPortal(
+      {open && typeof window !== 'undefined' && createPortal(
         <div ref={dropRef} style={{
           position: 'fixed', zIndex: 9999,
           top: pos.top, bottom: pos.bottom, left: pos.left,
-          width: Math.max(pos.width, 300),
+          width: Math.max(pos.width ?? 0, 300),
           background: '#16161C', border: '1px solid #2A2A35',
           borderRadius: 14, boxShadow: '0 20px 60px rgba(0,0,0,0.85)', padding: 14,
         }}>
@@ -156,10 +247,42 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   )
 }
 
+// ── Sub-components ────────────────────────────────────────────────────────────
+function SlotChar({ c, ph }: { c: string | null; ph: string }) {
+  return (
+    <span style={{
+      fontFamily: "'DM Mono', monospace",
+      fontSize: 13,
+      color: c ? '#ECECF1' : '#3A3A50',
+      minWidth: '0.65em',
+      textAlign: 'center',
+    }}>
+      {c ?? ph}
+    </span>
+  )
+}
+
+function Sep({ children }: { children: string }) {
+  return <span style={{ color: '#4A4A62', fontFamily: "'DM Mono', monospace", fontSize: 13, margin: '0 1px' }}>{children}</span>
+}
+
+function Cursor() {
+  return (
+    <span style={{
+      display: 'inline-block', width: 1, height: '1em',
+      background: '#22C55E', marginLeft: 1,
+      animation: 'blink 1s step-end infinite',
+    }}>
+      <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
+    </span>
+  )
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 36px 9px 12px',
   background: '#0D0D10', border: '1px solid #2A2A35', borderRadius: 8,
   fontSize: 13, color: '#ECECF1', outline: 'none', fontFamily: 'inherit',
+  minHeight: 38,
 }
 const iconStyle: React.CSSProperties = {
   position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
