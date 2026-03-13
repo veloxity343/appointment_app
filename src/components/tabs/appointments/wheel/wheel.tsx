@@ -29,7 +29,7 @@ export interface CyclicWheelProps {
 export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWheelProps) {
   const el         = useRef<HTMLDivElement>(null)
   const offsetRef  = useRef(0)
-  const snapTimer  = useRef<ReturnType<typeof setTimeout>>()
+  const snapTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isSnapping = useRef(false)   // true while our own smooth-scroll runs
   const isProg     = useRef(false)   // true during programmatic scroll (external select)
   const [, redraw] = useState(0)
@@ -73,7 +73,7 @@ export function CyclicWheel({ items, selected, onSelect, fmt, label }: CyclicWhe
   const onScroll = useCallback(() => {
     if (isProg.current) return
     correctIfNeeded()
-    clearTimeout(snapTimer.current)
+    if (snapTimer.current) clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
   }, [correctIfNeeded, snapToCentre])
 
@@ -134,7 +134,7 @@ export interface BoundedWheelProps {
 
 export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
-  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Track whether the current scroll was triggered programmatically
   const isProg    = useRef(false)
   const isBusy    = useRef(false)
@@ -156,7 +156,7 @@ export function BoundedWheel({ items, selected, onSelect, label }: BoundedWheelP
 
   const onScroll = useCallback(() => {
     if (isProg.current) return
-    clearTimeout(snapTimer.current)
+    if (snapTimer.current) clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToNearest, 120)
   }, []) // eslint-disable-line
 
@@ -231,7 +231,7 @@ export interface YearWheelProps {
 export function YearWheel({ year, onChange }: YearWheelProps) {
   const el        = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
-  const snapTimer = useRef<ReturnType<typeof setTimeout>>()
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isProg    = useRef(false)
   const isBusy    = useRef(false)
   const [, redraw] = useState(0)
@@ -264,7 +264,7 @@ export function YearWheel({ year, onChange }: YearWheelProps) {
   const onScroll = useCallback(() => {
     if (isProg.current) return
     correctIfNeeded()
-    clearTimeout(snapTimer.current)
+    if (snapTimer.current) clearTimeout(snapTimer.current)
     snapTimer.current = setTimeout(snapToCentre, 120)
   }, [correctIfNeeded, snapToCentre])
 

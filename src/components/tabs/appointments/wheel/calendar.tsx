@@ -5,9 +5,23 @@ import { createPortal } from 'react-dom'
 import { YearWheel } from './wheel'
 import {
   DateSlots, emptyDateSlots, dateSlotsToDisplay, dateSlotsToISO,
-  dateSlotsToPartialISO, pushDateDigit, popDateDigit, smartParseDate,
+  pushDateDigit, popDateDigit,
 } from '../parsers'
 import { useAnchorPos } from './hooks'
+
+// ── Keyframe injection (once, no JSX style tags) ───────────────────────────────
+const _injected = new Set<string>()
+function injectKeyframes(id: string, css: string) {
+  if (_injected.has(id) || typeof document === 'undefined') return
+  _injected.add(id)
+  const el = document.createElement('style')
+  el.textContent = css
+  document.head.appendChild(el)
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+const YEAR_MIN = 1980
+const YEAR_MAX = 2100
 
 const MONTHS_LONG = [
   'January','February','March','April','May','June',
@@ -15,14 +29,8 @@ const MONTHS_LONG = [
 ]
 const DAYS_SHORT = ['Mo','Tu','We','Th','Fr','Sa','Su']
 
-interface Props {
-  value:        string            // ISO yyyy-mm-dd (empty if unset)
-  textValue:    string            // display string (kept in parent for persistence)
-  onDateSelect: (iso: string, display: string) => void
-  onTextChange: (raw: string) => void
-}
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-// Parse ISO to slots for initialising when editing an existing record
 function isoToSlots(iso: string): DateSlots {
   if (!iso) return emptyDateSlots()
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
@@ -31,24 +39,81 @@ function isoToSlots(iso: string): DateSlots {
   return [d[0], d[1], mo[0], mo[1], y[0], y[1], y[2], y[3]]
 }
 
-export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }: Props) {
-  const [open, setOpen]     = useState(false)
-  const [slots, setSlots]   = useState<DateSlots>(() => isoToSlots(value))
-  const anchorRef           = useRef<HTMLDivElement>(null)
-  const dropRef             = useRef<HTMLDivElement>(null)
-  const inputRef            = useRef<HTMLInputElement>(null)
-  const pos                 = useAnchorPos(open, anchorRef)
+function autocorrectYear(s: DateSlots): DateSlots {
+  if (s[4] === null || s[5] === null || s[6] === null || s[7] === null) return s
+  const y = parseInt(s[4] + s[5] + s[6] + s[7])
+  if (y < YEAR_MIN) {
+    const min = String(YEAR_MIN)
+    return [s[0], s[1], s[2], s[3], min[0], min[1], min[2], min[3]] as DateSlots
+  }
+  return s
+}
 
-  const today    = new Date()
-  const initDate = value ? new Date(value + 'T00:00:00') : today
+/**
+ * Progressive year snapping:
+ *   0-2 digits → null (no snap)
+ *   3 digits   → closest year to currentYear within that decade prefix
+ *   4 digits   → exact, clamped to [YEAR_MIN, YEAR_MAX]
+ */
+function resolveViewYear(s: DateSlots, currentYear: number): number | null {
+  const y = [s[4], s[5], s[6], s[7]]
+  const filled = y.filter(v => v !== null).length
+  if (filled < 3) return null
+  if (filled === 3) {
+    const prefix  = y[0]! + y[1]! + y[2]!
+    const lo      = parseInt(prefix + '0')
+    const hi      = parseInt(prefix + '9')
+    const closest = Math.max(lo, Math.min(hi, currentYear))
+    return Math.max(YEAR_MIN, closest)
+  }
+  const exact = parseInt(y[0]! + y[1]! + y[2]! + y[3]!)
+  return Math.max(YEAR_MIN, Math.min(YEAR_MAX, exact))
+}
+
+function resolveViewMonth(s: DateSlots): number | null {
+  if (s[2] === null || s[3] === null) return null
+  const mo = parseInt(s[2] + s[3])
+  return mo >= 1 && mo <= 12 ? mo - 1 : null
+}
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
+interface Props {
+  value:        string
+  textValue:    string
+  onDateSelect: (iso: string, display: string) => void
+  onTextChange: (raw: string) => void
+}
+
+export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }: Props) {
+  const [open,    setOpen]    = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [slots,   setSlots]   = useState<DateSlots>(() => isoToSlots(value))
+
+  // Keep a ref that always reflects the latest slots — lets event handlers
+  // compute next-state without reading potentially-stale React state, and
+  // avoids calling onTextChange/onDateSelect inside a setState updater
+  // (which React forbids as it counts as a setState-during-render).
+  const slotsRef = useRef(slots)
+
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const dropRef   = useRef<HTMLDivElement>(null)
+  const inputRef  = useRef<HTMLInputElement>(null)
+  const pos       = useAnchorPos(open, anchorRef)
+
+  const today      = new Date()
+  const todayYear  = today.getFullYear()
+
+  const initDate   = value ? new Date(value + 'T00:00:00') : today
   const [viewMonth, setViewMonth] = useState(initDate.getMonth())
   const [viewYear,  setViewYear]  = useState(initDate.getFullYear())
 
-  // When value changes externally (e.g. clicking calendar day), sync slots
+  // Sync when value prop changes externally (dialog opens for edit)
   useEffect(() => {
     if (value) {
-      const newSlots = isoToSlots(value)
-      setSlots(newSlots)
+      const s = isoToSlots(value)
+      slotsRef.current = s
+      setSlots(s)
       const d = new Date(value + 'T00:00:00')
       if (!isNaN(d.getTime())) {
         setViewMonth(d.getMonth())
@@ -57,7 +122,6 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     }
   }, [value])
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
@@ -70,54 +134,55 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  // After updating slots, push display + ISO to parent and sync calendar view
-  const commitSlots = useCallback((newSlots: DateSlots) => {
-    const display = dateSlotsToDisplay(newSlots)
-    onTextChange(display)
+  /**
+   * Commit a freshly-computed slots value:
+   *   1. Update the ref and React state.
+   *   2. Call parent callbacks directly (never inside a setState updater).
+   *   3. Snap calendar view from fully-known slots only.
+   */
+  const commitSlots = useCallback((s: DateSlots) => {
+    slotsRef.current = s
+    setSlots(s)
 
-    // Try partial parse first for calendar snapping
-    const partial = dateSlotsToPartialISO(newSlots)
-    if (partial) {
-      const d = new Date(partial + 'T00:00:00')
-      if (!isNaN(d.getTime())) {
-        setViewMonth(d.getMonth())
-        setViewYear(d.getFullYear())
-      }
-    }
+    // Parent callbacks — safe here because commitSlots is called from event
+    // handlers (keyDown, selectDay), never from a setState updater.
+    onTextChange(dateSlotsToDisplay(s))
 
-    // Full parse for confirming the date
-    const iso = dateSlotsToISO(newSlots)
-    if (iso) {
-      onDateSelect(iso, display)
-    }
-  }, [onTextChange, onDateSelect])
+    const newMonth = resolveViewMonth(s)
+    if (newMonth !== null) setViewMonth(newMonth)
+
+    const newYear = resolveViewYear(s, todayYear)
+    if (newYear !== null) setViewYear(newYear)
+
+    const iso = dateSlotsToISO(s)
+    if (iso) onDateSelect(iso, dateSlotsToDisplay(s))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onTextChange, onDateSelect, todayYear])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    e.preventDefault() // block all native text editing
+    e.preventDefault()
 
     if (e.key === 'Backspace' || e.key === 'Delete') {
-      const next = popDateDigit(slots)
-      setSlots(next)
-      commitSlots(next)
+      // Read current slots from ref (always fresh), compute next, commit.
+      commitSlots(popDateDigit(slotsRef.current))
       return
     }
 
     if (/^\d$/.test(e.key)) {
-      const next = pushDateDigit(slots, e.key)
-      setSlots(next)
-      commitSlots(next)
-      return
+      const pushed    = pushDateDigit(slotsRef.current, e.key)
+      const corrected = autocorrectYear(pushed)
+      commitSlots(corrected)
     }
-    // Ignore everything else (arrows, letters, etc.)
-  }, [slots, commitSlots])
+  }, [commitSlots])
 
   function selectDay(day: number) {
-    const mm    = String(viewMonth + 1).padStart(2, '0')
-    const dd    = String(day).padStart(2, '0')
-    const iso   = `${viewYear}-${mm}-${dd}`
-    const disp  = `${dd}/${mm}/${viewYear}`
-    const newSlots = isoToSlots(iso)
-    setSlots(newSlots)
+    const mm   = String(viewMonth + 1).padStart(2, '0')
+    const dd   = String(day).padStart(2, '0')
+    const iso  = `${viewYear}-${mm}-${dd}`
+    const disp = `${dd}/${mm}/${viewYear}`
+    const s    = isoToSlots(iso)
+    slotsRef.current = s
+    setSlots(s)
     onDateSelect(iso, disp)
     onTextChange(disp)
     setOpen(false)
@@ -146,10 +211,7 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   const selM    = selDate && !isNaN(selDate.getTime()) ? selDate.getMonth()    : null
   const selY    = selDate && !isNaN(selDate.getTime()) ? selDate.getFullYear() : null
 
-  // Build display with colour-coded placeholder chars
-  const display = dateSlotsToDisplay(slots)
-  const ph = ['d','d','m','m','y','y','y','y']
-  const filled = slots.every(s => s !== null)
+  const cursorAt = slots.findIndex(s => s === null)
 
   return (
     <div ref={anchorRef}>
@@ -157,33 +219,29 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
         style={{ position: 'relative' }}
         onClick={() => { setOpen(true); inputRef.current?.focus() }}
       >
-        {/* Custom display div styled like an input */}
         <div style={{
           ...inputStyle,
-          display: 'flex', alignItems: 'center', gap: 0,
+          border: focused ? '1px solid rgba(34,197,94,0.5)' : '1px solid #2A2A35',
+          display: 'flex', alignItems: 'center',
           cursor: 'text', userSelect: 'none',
         }}>
-          {/* dd */}
-          <SlotChar c={slots[0]} ph="d" />
-          <SlotChar c={slots[1]} ph="d" />
+          <SlotChar c={slots[0]} ph="d" showCursor={focused && cursorAt === 0} />
+          <SlotChar c={slots[1]} ph="d" showCursor={focused && cursorAt === 1} />
           <Sep>/</Sep>
-          {/* mm */}
-          <SlotChar c={slots[2]} ph="m" />
-          <SlotChar c={slots[3]} ph="m" />
+          <SlotChar c={slots[2]} ph="m" showCursor={focused && cursorAt === 2} />
+          <SlotChar c={slots[3]} ph="m" showCursor={focused && cursorAt === 3} />
           <Sep>/</Sep>
-          {/* yyyy */}
-          <SlotChar c={slots[4]} ph="y" />
-          <SlotChar c={slots[5]} ph="y" />
-          <SlotChar c={slots[6]} ph="y" />
-          <SlotChar c={slots[7]} ph="y" />
-          {/* Cursor blink on the next empty slot */}
-          {!filled && <Cursor />}
+          <SlotChar c={slots[4]} ph="y" showCursor={focused && cursorAt === 4} />
+          <SlotChar c={slots[5]} ph="y" showCursor={focused && cursorAt === 5} />
+          <SlotChar c={slots[6]} ph="y" showCursor={focused && cursorAt === 6} />
+          <SlotChar c={slots[7]} ph="y" showCursor={focused && cursorAt === 7} />
         </div>
-        {/* Hidden input to capture keystrokes */}
+
         <input
           ref={inputRef}
           onKeyDown={handleKeyDown}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { setOpen(true); setFocused(true) }}
+          onBlur={() => setFocused(false)}
           readOnly
           style={{
             position: 'absolute', inset: 0, opacity: 0,
@@ -223,7 +281,11 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
             {cells.map((day, i) => {
               if (!day) return <div key={i} />
               const isSel   = day === selD && viewMonth === selM && viewYear === selY
-              const isToday = day === today.getDate() && viewMonth === today.getMonth() && viewYear === today.getFullYear()
+              const isToday = (
+                day === today.getDate() &&
+                viewMonth === today.getMonth() &&
+                viewYear  === today.getFullYear()
+              )
               return (
                 <button key={i} onClick={() => selectDay(day)} style={{
                   width: '100%', aspectRatio: '1', borderRadius: 6, cursor: 'pointer',
@@ -247,40 +309,45 @@ export function CalendarPicker({ value, textValue, onDateSelect, onTextChange }:
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
-function SlotChar({ c, ph }: { c: string | null; ph: string }) {
+// ── Primitives ─────────────────────────────────────────────────────────────────
+
+function SlotChar({ c, ph, showCursor }: { c: string | null; ph: string; showCursor: boolean }) {
   return (
-    <span style={{
-      fontFamily: "'DM Mono', monospace",
-      fontSize: 13,
-      color: c ? '#ECECF1' : '#3A3A50',
-      minWidth: '0.65em',
-      textAlign: 'center',
-    }}>
-      {c ?? ph}
+    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      {showCursor && <BlinkCursor id="blink-cal" />}
+      <span style={{
+        fontFamily: "'DM Mono', monospace", fontSize: 13,
+        color: c ? '#ECECF1' : '#3A3A50',
+        minWidth: '0.65em', textAlign: 'center',
+      }}>
+        {c ?? ph}
+      </span>
     </span>
   )
 }
 
 function Sep({ children }: { children: string }) {
-  return <span style={{ color: '#4A4A62', fontFamily: "'DM Mono', monospace", fontSize: 13, margin: '0 1px' }}>{children}</span>
+  return (
+    <span style={{ color: '#4A4A62', fontFamily: "'DM Mono', monospace", fontSize: 13, margin: '0 1px' }}>
+      {children}
+    </span>
+  )
 }
 
-function Cursor() {
+function BlinkCursor({ id }: { id: string }) {
+  injectKeyframes(id, `@keyframes ${id}{0%,100%{opacity:1}50%{opacity:0}}`)
   return (
     <span style={{
-      display: 'inline-block', width: 1, height: '1em',
-      background: '#22C55E', marginLeft: 1,
-      animation: 'blink 1s step-end infinite',
-    }}>
-      <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
-    </span>
+      display: 'inline-block', width: 1.5, height: '1em',
+      background: '#22C55E', marginRight: 1, borderRadius: 1,
+      animation: `${id} 1s step-end infinite`,
+    }} />
   )
 }
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 36px 9px 12px',
-  background: '#0D0D10', border: '1px solid #2A2A35', borderRadius: 8,
+  background: '#0D0D10', borderRadius: 8,
   fontSize: 13, color: '#ECECF1', outline: 'none', fontFamily: 'inherit',
   minHeight: 38,
 }
