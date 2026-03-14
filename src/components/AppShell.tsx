@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { setCookie } from 'cookies-next'
-import { AppointmentsTab } from './tabs/AppointmentsTab'
+import { AppointmentsTab } from './tabs/appointments/AppointmentsTab'
 import { RemindersTab }    from './tabs/RemindersTab'
 import { DataTab }         from './tabs/DataTab'
 import type { TabId, WeekFilter } from '@/types'
